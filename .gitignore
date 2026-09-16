@@ -1,0 +1,12 @@
+# ECG data - downloaded separately, see README
+mitdb/
+physionet.org/
+
+# Python
+__pycache__/
+*.pyc
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store

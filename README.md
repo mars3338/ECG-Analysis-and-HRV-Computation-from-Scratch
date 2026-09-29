@@ -1,6 +1,6 @@
 # ECG Analysis and HRV Computation from Scratch
 
-Reads raw PhysioNet ECG recordings, detects heartbeats, and computes heart-rate variability metrics in pure Python, with zero imports. 99.66% beat-detection sensitivity across all 48 records of the MIT-BIH Arrhythmia Database.
+Reads raw PhysioNet ECG recordings, detects heartbeats, and computes heart-rate variability metrics in pure Python, with neither the standard or third-party libraries. 99.66% beat-detection sensitivity across all 48 records of the MIT-BIH Arrhythmia Database.
 
 ## Why
 
@@ -13,19 +13,26 @@ Reading an ECG and reporting HRV is a handful of lines with WFDB and NeuroKit2. 
 
 Implementing each means learning each, and such was the goal of this project.
 
-## Usage
-
-### Input
-
+## Quick start
+ 
+Requires Python 3.x. No installation step — there are no dependencies.
+ 
+The MIT-BIH Arrhythmia Database is freely available from PhysioNet and is not included in this repository (~91 MB). Download the `.hea`, `.dat`, and `.atr` files into `mitdb/`:
+ 
+```bash
+wget -r -np -nH --cut-dirs=4 -P mitdb/ \
+  https://physionet.org/files/mitdb/1.0.0/
+```
+ 
+Then analyze a single record:
+ 
 ```
 $ python project.py
-Record name: (Any record in the MIT-BIH Database, i.e. 100)
-Sample from: (The second at which to begin scanning, i.e. 0)
-Sample for: (The second at which to stop, i.e 300)
+Record name:  100        # any record in the MIT-BIH database
+Start second: 0          # second at which to begin scanning
+End second:   300        # second at which to stop
 ```
-
-### Output
-
+ 
 ```
 Sensitivity: 1.0000
 PPV: 1.0000
@@ -36,10 +43,70 @@ RMSSD: 26.09 ms
 SDNN: 25.41 ms
 Excluded beats: 10/370 (2.70%)
 ```
+ 
+### Reproducing the published results
+ 
+```
+python benchmark.py
+```
+ 
+```bash
+python benchmark.py --all
+```
+## Results
+ 
+### QRS detection
+ 
+Benchmarked against the cardiologist-annotated reference beats of the MIT-BIH Arrhythmia Database. A detection counts as correct if it falls within 150 ms of an annotated beat, the tolerance specified by ANSI/AAMI EC57.
+ 
+| | Sensitivity | PPV | Beats | FN | FP |
+|---|---|---|---|---|---|
+| All 48 records | **99.66%** | **99.61%** | 109,150 | 366 | 425 |
+| 44-record EC57 subset | 99.65% | 99.58% | 100,415 | 354 | 421 |
+ 
+Runtime is 0.34 s for a 5-minute record and 2.0 s for a full 30-minute record, in pure Python on a single core.
+ 
+For context, the original Pan & Tompkins paper reports 99.3% sensitivity and 99.5% PPV. That figure relates to different records and is **not** directly comparable, but indicates the range a correct implementation should land in.
+ 
+### HRV accuracy
+ 
+Measured across the first five minutes of ten records, chosen to show a range of ectopy. *Unfiltered* takes every detected interval at face value with no ectopic filtering; *This project* applies the filter described below; *Reference* is computed from the annotations.
+ 
+#### RMSSD (ms)
+ 
+| Record | Unfiltered | This project | Reference | Excluded |
+|---|---|---|---|---|
+| 103 | 29.0 | 29.0 | 29.1 | 0.0% |
+| 234 | 17.4 | 17.4 | 17.1 | 0.0% |
+| 100 | 55.9 | 26.1 | 25.9 | 2.7% |
+| 113 | 96.9 | 83.2 | 87.8 | 2.8% |
+| 106 | 361.9 | 60.7 | 61.2 | 33.3% |
+| 119 | 477.6 | 35.2 | 37.5 | 64.6% |
+| 208 | 193.3 | 56.9 | 25.6 | 61.3% |
+| 233 | 235.6 | 32.2 | 15.4 | 65.8% |
+| 221 | 304.2 | 91.2 | 216.4 | 70.7% |
+| 203 | 283.4 | 78.2 | 227.0 | 76.1% |
+ 
+#### SDNN (ms)
+ 
+| Record | Unfiltered | This project | Reference | Excluded |
+|---|---|---|---|---|
+| 103 | 38.0 | 38.0 | 38.3 | 0.0% |
+| 234 | 14.3 | 14.3 | 14.3 | 0.0% |
+| 100 | 38.7 | 25.4 | 25.4 | 2.7% |
+| 113 | 80.4 | 71.7 | 74.9 | 2.8% |
+| 106 | 234.9 | 108.1 | 107.2 | 33.3% |
+| 119 | 261.5 | 27.7 | 29.1 | 64.6% |
+| 208 | 131.9 | 41.9 | 30.5 | 61.3% |
+| 233 | 131.4 | 28.8 | 18.5 | 65.8% |
+| 221 | 197.0 | 83.3 | 156.9 | 70.7% |
+| 203 | 202.0 | 155.9 | 187.0 | 76.1% |
+ 
+**Read the exclusion column before the others.** The ectopic filter assumes intervals should resemble their neighbors, which holds up to roughly 60% exclusion and then stops holding. Records 203 and 221 are atrial fibrillation: the rhythm is irregular by nature, so "deviates from its neighbors" stops meaning "ectopic" and the filter discards genuine variability — hence 78.2 against a reference of 227.0. Records 208 and 233 fail in the opposite direction, with frequent ventricular ectopy surviving into the retained intervals. These are the filter's known failure mode, not noise in the measurement, and the exclusion percentage is printed at runtime specifically so the breakdown is visible rather than silent.
 
 ## How it works
 
-The program's overall flow is broken down into several major functions: load, clean, detect, validate, and HRV computation, in that order. Each function is explained in its place.
+The flow is five stages: **load**, **clean**, **detect**, **validate**, and **HRV computation**.
 
 ### Load
 
@@ -51,7 +118,16 @@ The annotations are formatted as one or more 16-bit/2-byte samples, the high 6 b
 
 ### Clean
 
-Pan-Tompkins calls for a 5 Hz – 15 Hz bandpass to isolate QRS energy; this implementation uses a second-order Butterworth cascade in place of the paper's integer-coefficient design. The filter's response, its effect on different frequencies, can be expressed as H(z), where z is a point on the unit circle, in the complex plane, indicative of a frequency. H(z) can be computed (and the filter thus applied) via weighted arithmetic of the inputs and outputs.
+Pan-Tompkins calls for a 5–15 Hz bandpass to isolate QRS energy. This implementation uses a second-order Butterworth cascade in place of the paper's integer-coefficient design, designed from scratch rather than with precomputed coefficients:
+ 
+1. Prewarp the cutoff: The bilinear transform compresses the infinite analog frequency axis onto the digital one, which stops at Nyquist. That bends every frequency except DC, so a filter designed directly at the cutoff lands below it once digital. Applying the inverse picks the analog frequency that will bend onto the target.
+2. Place the analog poles: Butterworth spaces poles evenly around a circle; second order takes the two in the left half-plane, at 3π/4 and 5π/4. Left-plane poles guarantee stability — a positive exponent would grow without bound under feedback.
+3. Map to the z-domain: via the bilinear transform, which sends the left half-plane inside the unit circle, so the response decays rather than diverging.
+4. Recover coefficients: by multiplying the roots back out, and **normalize the gain** so the passband comes through untouched — at DC for the lowpass, at Nyquist for the highpass.
+
+The result is a difference equation, y[n] = (b0)(x[n]) + (b1)(x[n - 1]) + (b2)(x[n - 2]) − (a1)(y[n - 1]) − (a2)(y[n - 2]), applied forward and backward for zero phase. Below is the derivation, which dives deeper:
+
+#### Derivation
 
 H(z) equals Y(z) / X(z) - output over input, a transfer function. Y(z) / X(z) = B(z) / A(z) = ((b0) + (b1)(z^-1) + (b2)(z^-2)) / ((a0) + (a1)(z^-1) + (a2)(z^-2)), where B(z) is the product of the distance to the zeros and A(z) is the product of the distance to the poles. The output thus emphasizes and attenuates the desired frequencies. The a and b coefficients are those of a polynomial whose roots are the poles/zeros respectively. b0 is the gain, the weight on the current input, and a0 is the weight on the current output, which is normalized to one.
 Cross multiplying gets rid of the fraction:
@@ -125,55 +201,13 @@ As mentioned, RMSSD and SDNN, the reported metrics, are defined over normal-to-n
 
 With NN-intervals found, HRV is computed normally: SDNN is the standard deviation of NN-intervals (N-1), and RMSSD is the root mean square of successive differences - meaning differences that were adjacent in the original series. Compacting the interval list and differencing it pairs intervals that were never successive; thus differences must be confirmed as neighbors before computation.
 
-## Results
+## Limitations
 
-### QRS Detection
-
-Benchmarked against the cardiologist-annotated reference beats of the MIT-BIH Arrhythmia Database. A detection counts as correct if it falls within 150 ms of an annotated beat, the tolerance specified by ANSI/AAMI EC57.
-
-| | Sensitivity | PPV | Beats | FN | FP |
-|---|---|---|---|---|---|
-| All 48 records | **99.66%** | **99.61%** | 109,150 | 366 | 425 |
-| 44-record EC57 subset | 99.65% | 99.58% | 100,415 | 354 | 421 |
-
-Runtime is 0.34 s for a 5-minute record and 2.0 s for a full 30-minute record, in pure Python on a single core.
-
-For context, the original Pan & Tompkins paper reports 99.3% sensitivity and 99.5% PPV. That figure relates to different record and is **not** directly comparable, but indicates the range a correct implementation should land in.
-
-### HRV Accuracy 
-
-Measured across the first five minutes of ten records, chosen to show a range of ectopy. The unfiltered column is what results from taking every detected interval at face value, with no ectopic filtering, then this program's results, then the reference annotations.
-
-#### RMSDD
-
-| Record | Unfiltered | This project | Reference |  excluded |
-|---|---|---|---|---|
-| 103 | 29.0 | 29.0 | 29.1 | 0.0% |
-| 234 | 17.4 | 17.4 | 17.1 | 0.0% |
-| 100 | 55.9 | 26.1 | 25.9 | 2.7% |
-| 113 | 96.9 | 83.2 | 87.8 | 2.8% |
-| 106 | 361.9 | 60.7 | 61.2 | 33.3% |
-| 119 | 477.6 | 35.2 | 37.5 | 64.6% |
-| 208 | 193.3 | 56.9 | 25.6 | 61.3% |
-| 233 | 235.6 | 32.2 | 15.4 | 65.8% |
-| 221 | 304.2 | 91.2 | 216.4 | 70.7% |
-| 203 | 283.4 | 78.2 | 227.0 | 76.1% |
-
-
-#### SDNN
-
-| Record | Unfiltered | This project | Reference | Excluded |
-|---|---|---|---|---|
-| 103 | 38.0 | 38.0 | 38.3 | 0.0% |
-| 234 | 14.3 | 14.3 | 14.3 | 0.0% |
-| 100 | 38.7 | 25.4 | 25.4 | 2.7% |
-| 113 | 80.4 | 71.7 | 74.9 | 2.8% |
-| 106 | 234.9 | 108.1 | 107.2 | 33.3% |
-| 119 | 261.5 | 27.7 | 29.1 | 64.6% |
-| 208 | 131.9 | 41.9 | 30.5 | 61.3% |
-| 233 | 131.4 | 28.8 | 18.5 | 65.8% |
-| 221 | 197.0 | 83.3 | 156.9 | 70.7% |
-| 203 | 202.0 | 155.9 | 187.0 | 76.1% |
+- The ectopic filter cannot handle irregular rhythms. It assumes intervals should resemble their neighbors. Exclusion is printed to show when the filter breaks down, and begins invalidating usable intervals.
+- Only the PhysioNet MIT-BIH database is supported. This is not a general WFDB reader.
+- The zero-phase filter starts from zero-initial conditions rather than reflecting the signal at the boundaries, resulting in a small transient at each end of the window.
+- Detection assumes a single dominant QRS morphology. Records with abnormal shapes degrade.
+- Only time-domain HRV is computed.
 
 ## Project Structure
 
@@ -182,6 +216,7 @@ project.py  main file
 math_utilities.py   sin, cos, tan, exp, etc
 complex.py  Complex class and methods
 signals.py  Butterworth design and filter application
+benchmark.py  Benchmarks detection across sets of records
 test_project.py  test for project.py
 test_math_utilities.py  tests for math_utilities.py
 test_complex.py  tests for complex.py
@@ -189,24 +224,6 @@ test_signals.py  tests for signals.py
 mitdb/  records, see below
 ```
 
-## Setup
-
-The MIT-BIH Arrhythmia Database is freely available from PhysioNet and is not included in this repository (~91 MB). Download the `.hea`, `.dat`, and `.atr` files into `mitdb/`:
-
-
-```bash
-wget -r -np -nH --cut-dirs=4 -P mitdb/ \
-  https://physionet.org/files/mitdb/1.0.0/
-```
-
-
-## Limitations
-
-- The ectopic filter cannot handle irregular rhythms. It assumes intervals should resemble their neighbors. Exclusion is printed to show when the filter breaks down, and begins invalidating usable intervals.
-- Only the PhysioNet MIT-BIH database is supported. This is not a general WFDB reader.
-- The zero-phase filter starts from zero-initial conditions rather than reflecting the signal at the boundaries, resulting in a small transient at each end of the window.
-- Detection assumes a single dominant QRS morphology. Records with abnormal shapes degrade.
-- Only time-domain HRV is computed.
 
 ## References
 

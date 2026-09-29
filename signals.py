@@ -93,8 +93,9 @@ def apply_filter(signal, b0, b1, b2, a1, a2):
         list: The filtered signal.
     """
     output = []
-    # The filter's response can be expressed as H(z): the distance from the zeros,
-    # Y(z), over the distance from the poles, X(z), where z is a point on the unit
+    # The filter's response can be expressed as H(z), the ratio of the output to the input,
+    # or Y(z) over X(z), itself equal to the distance from the zeros,
+    # B(z), over the distance from the poles, A(z), where z is a point on the unit
     # circle. Placed in the complex plane, the point represents a frequency. As the
     # roots of the numerator are approached, the output decays. As the roots of the
     # denominator are approached, it grows. The output thus emphasizes and attenuates

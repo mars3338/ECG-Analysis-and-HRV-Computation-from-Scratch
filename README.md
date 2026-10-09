@@ -221,7 +221,7 @@ test_project.py  test for project.py
 test_math_utilities.py  tests for math_utilities.py
 test_complex.py  tests for complex.py
 test_signals.py  tests for signals.py
-mitdb/  records, see below
+mitdb/  records, see above
 ```
 
 
